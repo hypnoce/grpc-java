@@ -126,6 +126,8 @@ public final class ServerImpl extends io.grpc.Server implements InternalInstrume
   private final CallTracer serverCallTracer;
   private final Deadline.Ticker ticker;
 
+  private ServerListener serverListener;
+
   /**
    * Construct a server.
    *
@@ -133,7 +135,7 @@ public final class ServerImpl extends io.grpc.Server implements InternalInstrume
    * @param transportServer transport servers that will create new incoming transports
    * @param rootContext context that callbacks for new RPCs should be derived from
    */
-  ServerImpl(
+  public ServerImpl(
       ServerImplBuilder builder,
       InternalServer transportServer,
       Context rootContext) {
@@ -173,16 +175,26 @@ public final class ServerImpl extends io.grpc.Server implements InternalInstrume
     synchronized (lock) {
       checkState(!started, "Already started");
       checkState(!shutdown, "Shutting down");
-      // Start and wait for any ports to actually be bound.
-
-      ServerListenerImpl listener = new ServerListenerImpl();
-      transportServer.start(listener);
+      // Start and wait for any port to actually be bound.
+      serverListener = new ServerListenerImpl();
+      transportServer.start(serverListener);
       executor = Preconditions.checkNotNull(executorPool.getObject(), "executor");
       started = true;
       return this;
     }
   }
 
+  /**
+   * Returns the ServerListener that the server started with. Never null.
+   *
+   * @throws IllegalStateException if called before {@line #start()} is done.
+   */
+  public ServerListener getServerListener() {
+    synchronized (lock) {
+      checkState(started, "Not started");
+    }
+    return serverListener;
+  }
 
   @Override
   public int getPort() {
