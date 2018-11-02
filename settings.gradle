@@ -50,7 +50,6 @@ include ":grpc-xds"
 include ":grpc-bom"
 include ":grpc-rls"
 include ":grpc-servlet"
-include ":grpc-servlet-interop-testing"
 
 project(':grpc-api').projectDir = "$rootDir/api" as File
 project(':grpc-core').projectDir = "$rootDir/core" as File
@@ -76,7 +75,6 @@ project(':grpc-xds').projectDir = "$rootDir/xds" as File
 project(':grpc-bom').projectDir = "$rootDir/bom" as File
 project(':grpc-rls').projectDir = "$rootDir/rls" as File
 project(':grpc-servlet').projectDir = "$rootDir/servlet" as File
-project(':grpc-servlet-interop-testing').projectDir = "$rootDir/servlet/interop-testing" as File
 
 if (settings.hasProperty('skipCodegen') && skipCodegen.toBoolean()) {
     println '*** Skipping the build of codegen and compilation of proto files because skipCodegen=true'

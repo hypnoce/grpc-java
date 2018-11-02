@@ -157,6 +157,10 @@ public abstract class AbstractTransportTest {
     };
   }
 
+  protected boolean isServletServer() {
+    return false;
+  }
+
   /**
    * When non-null, will be shut down during tearDown(). However, it _must_ have been started with
    * {@code serverListener}, otherwise tearDown() can't wait for shutdown which can put following
@@ -184,7 +188,7 @@ public abstract class AbstractTransportTest {
 
   private ManagedClientTransport.Listener mockClientTransportListener
       = mock(ManagedClientTransport.Listener.class);
-  private MockServerListener serverListener = new MockServerListener();
+  private MockServerListener serverListener = new MockServerListener(isServletServer());
   private ArgumentCaptor<Throwable> throwableCaptor = ArgumentCaptor.forClass(Throwable.class);
   private final TestClientStreamTracer clientStreamTracer1 = new TestClientStreamTracer();
   private final TestClientStreamTracer clientStreamTracer2 = new TestClientStreamTracer();
@@ -237,6 +241,7 @@ public abstract class AbstractTransportTest {
   public void tearDown() throws InterruptedException {
     if (client != null) {
       client.shutdownNow(Status.UNKNOWN.withDescription("teardown"));
+      verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportShutdown(any(Status.class));
     }
     if (serverTransport != null) {
       serverTransport.shutdownNow(Status.UNKNOWN.withDescription("teardown"));
@@ -371,10 +376,12 @@ public abstract class AbstractTransportTest {
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportTerminated();
     inOrder.verify(mockClientTransportListener).transportShutdown(any(Status.class));
     inOrder.verify(mockClientTransportListener).transportTerminated();
-    assertTrue(serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS));
-    server.shutdown();
-    assertTrue(serverListener.waitForShutdown(TIMEOUT_MS, TimeUnit.MILLISECONDS));
-    server = null;
+    if (!isServletServer()) {
+      assertTrue(serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+      server.shutdown();
+      assertTrue(serverListener.waitForShutdown(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+      server = null;
+    }
     verify(mockClientTransportListener, never()).transportInUse(anyBoolean());
   }
 
@@ -402,7 +409,7 @@ public abstract class AbstractTransportTest {
     }
     InternalServer server2 = newServer(port, Arrays.asList(serverStreamTracerFactory));
     thrown.expect(IOException.class);
-    server2.start(new MockServerListener());
+    server2.start(new MockServerListener(isServletServer()));
   }
 
   @Test
@@ -470,7 +477,7 @@ public abstract class AbstractTransportTest {
     // A new server should be able to start listening, since the current server has given up
     // resources. There may be cases this is impossible in the future, but for now it is a useful
     // property.
-    serverListener = new MockServerListener();
+    serverListener = new MockServerListener(isServletServer());
     server = newServer(port, Arrays.asList(serverStreamTracerFactory));
     server.start(serverListener);
 
@@ -516,8 +523,10 @@ public abstract class AbstractTransportTest {
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportShutdown(any(Status.class));
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportTerminated();
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportInUse(false);
-    assertTrue(serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS));
-    assertTrue(serverTransportListener.isTerminated());
+    assertTrue(
+        serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        || isServletServer());
+    assertTrue(serverTransportListener.isTerminated() || isServletServer());
 
     assertEquals(status, clientStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
     assertNotNull(clientStreamListener.trailers.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
@@ -1216,7 +1225,9 @@ public abstract class AbstractTransportTest {
     Status serverStatus = serverStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
     assertNotEquals(Status.Code.OK, serverStatus.getCode());
     // Cause should not be transmitted between client and server by default
-    assertNull(serverStatus.getCause());
+    if (!isServletServer()) {
+      assertNull(serverStatus.getCause());
+    } // else servlet fails with a cause that is specific to the container
 
     clientStream.cancel(status);
     assertTrue(clientStreamTracer1.getOutboundHeaders());
@@ -1537,11 +1548,6 @@ public abstract class AbstractTransportTest {
     server.stream.close(Status.INTERNAL, new Metadata());
     assertNotNull(clientStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
     assertNotNull(clientStreamListener.trailers.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
-
-    // Ensure that for a closed ServerStream, interactions are noops
-    server.stream.writeHeaders(new Metadata());
-    server.stream.writeMessage(methodDescriptor.streamResponse("response"));
-    server.stream.close(Status.INTERNAL, new Metadata());
 
     // Make sure new streams still work properly
     doPingPong(serverListener);
@@ -1882,14 +1888,16 @@ public abstract class AbstractTransportTest {
     assertNotNull(clientSocketStats.socketOptions.lingerSeconds);
     assertTrue(clientSocketStats.socketOptions.others.containsKey("SO_SNDBUF"));
 
-    SocketStats serverSocketStats = serverTransportListener.transport.getStats().get();
-    assertEquals(
-        "serverLocal " + serverStream.getAttributes(), serverAddress, serverSocketStats.local);
-    assertEquals(
-        "serverRemote " + serverStream.getAttributes(), clientAddress, serverSocketStats.remote);
-    // very basic sanity check that socket options are populated
-    assertNotNull(serverSocketStats.socketOptions.lingerSeconds);
-    assertTrue(serverSocketStats.socketOptions.others.containsKey("SO_SNDBUF"));
+    if (!isServletServer()) {
+      SocketStats serverSocketStats = serverTransportListener.transport.getStats().get();
+      assertEquals(
+          "serverLocal " + serverStream.getAttributes(), serverAddress, serverSocketStats.local);
+      assertEquals(
+          "serverRemote " + serverStream.getAttributes(), clientAddress, serverSocketStats.remote);
+      // very basic sanity check that socket options are populated
+      assertNotNull(serverSocketStats.socketOptions.lingerSeconds);
+      assertTrue(serverSocketStats.socketOptions.others.containsKey("SO_SNDBUF"));
+    }
   }
 
   /** This assumes the server limits metadata size to GrpcUtil.DEFAULT_MAX_HEADER_LIST_SIZE. */
@@ -2107,11 +2115,22 @@ public abstract class AbstractTransportTest {
     public final BlockingQueue<MockServerTransportListener> listeners
         = new LinkedBlockingQueue<>();
     private final SettableFuture<?> shutdown = SettableFuture.create();
+    private final boolean isServletServer;
+
+    private MockServerTransportListener listener;
+
+    MockServerListener(boolean isServletServer) {
+      this.isServletServer = isServletServer;
+    }
 
     @Override
     public ServerTransportListener transportCreated(ServerTransport transport) {
       MockServerTransportListener listener = new MockServerTransportListener(transport);
-      listeners.add(listener);
+      if (isServletServer) {
+        this.listener = listener;
+      } else {
+        listeners.add(listener);
+      }
       return listener;
     }
 
@@ -2126,9 +2145,15 @@ public abstract class AbstractTransportTest {
 
     public MockServerTransportListener takeListenerOrFail(long timeout, TimeUnit unit)
         throws InterruptedException {
-      MockServerTransportListener listener = listeners.poll(timeout, unit);
+      MockServerTransportListener listener =
+          isServletServer ? this.listener : listeners.poll(timeout, unit);
+
       if (listener == null) {
-        fail("Timed out waiting for server transport");
+        if (isServletServer) {
+          fail("Server transport not available");
+        } else {
+          fail("Timed out waiting for server transport");
+        }
       }
       return listener;
     }
@@ -2146,8 +2171,8 @@ public abstract class AbstractTransportTest {
     @Override
     public void streamCreated(ServerStream stream, String method, Metadata headers) {
       ServerStreamListenerBase listener = new ServerStreamListenerBase();
-      streams.add(new StreamCreation(stream, method, headers, listener));
       stream.setListener(listener);
+      streams.add(new StreamCreation(stream, method, headers, listener));
     }
 
     @Override

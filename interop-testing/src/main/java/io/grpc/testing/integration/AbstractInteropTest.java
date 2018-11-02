@@ -223,11 +223,9 @@ public abstract class AbstractInteropTest {
 
   protected static final Empty EMPTY = Empty.getDefaultInstance();
 
-  private void startServer() {
+  private void configBuilder(@Nullable AbstractServerImplBuilder<?> builder) {
     maybeStartHandshakerServer();
-    ServerBuilder<?> builder = getServerBuilder();
     if (builder == null) {
-      server = null;
       return;
     }
     testServiceExecutor = Executors.newScheduledThreadPool(2);
@@ -246,6 +244,13 @@ public abstract class AbstractInteropTest {
                 allInterceptors))
         .addStreamTracerFactory(serverStreamTracerFactory);
 
+  }
+
+  protected void startServer(@Nullable AbstractServerImplBuilder<?> builder) {
+    if (builder == null) {
+      server = null;
+      return;
+    }
     try {
       server = builder.build().start();
     } catch (IOException ex) {
@@ -312,7 +317,9 @@ public abstract class AbstractInteropTest {
    */
   @Before
   public void setUp() {
-    startServer();
+    AbstractServerImplBuilder<?> builder = getServerBuilder();
+    configBuilder(builder);
+    startServer(builder);
     channel = createChannel();
 
     blockingStub =
