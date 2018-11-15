@@ -376,12 +376,13 @@ public abstract class AbstractTransportTest {
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportTerminated();
     inOrder.verify(mockClientTransportListener).transportShutdown(any(Status.class));
     inOrder.verify(mockClientTransportListener).transportTerminated();
-    if (!isServletServer()) {
-      assertTrue(serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS));
-      server.shutdown();
-      assertTrue(serverListener.waitForShutdown(TIMEOUT_MS, TimeUnit.MILLISECONDS));
-      server = null;
-    }
+    verify(mockClientTransportListener, never()).transportInUse(anyBoolean());
+
+    assumeTrue(!isServletServer());
+    assertTrue(serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+    server.shutdown();
+    assertTrue(serverListener.waitForShutdown(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+    server = null;
     verify(mockClientTransportListener, never()).transportInUse(anyBoolean());
   }
 
@@ -402,14 +403,10 @@ public abstract class AbstractTransportTest {
   public void serverAlreadyListening() throws Exception {
     client = null;
     server.start(serverListener);
-    int port = -1;
-    SocketAddress addr = server.getListenSocketAddress();
-    if (addr instanceof InetSocketAddress) {
-      port = ((InetSocketAddress) addr).getPort();
-    }
-    InternalServer server2 = newServer(port, Arrays.asList(serverStreamTracerFactory));
+    InternalServer server2 = newServer(server, Arrays.asList(serverStreamTracerFactory));
+    ServerListener serverListener2 = new MockServerListener(isServletServer());
     thrown.expect(IOException.class);
-    server2.start(new MockServerListener(isServletServer()));
+    server2.start(serverListener2);
   }
 
   @Test
@@ -523,10 +520,9 @@ public abstract class AbstractTransportTest {
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportShutdown(any(Status.class));
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportTerminated();
     verify(mockClientTransportListener, timeout(TIMEOUT_MS)).transportInUse(false);
-    assertTrue(
-        serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        || isServletServer());
-    assertTrue(serverTransportListener.isTerminated() || isServletServer());
+    assertTrue(isServletServer()
+        || serverTransportListener.waitForTermination(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+    assertTrue(isServletServer() || serverTransportListener.isTerminated());
 
     assertEquals(status, clientStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
     assertNotNull(clientStreamListener.trailers.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
@@ -1929,9 +1925,7 @@ public abstract class AbstractTransportTest {
     Status status = clientStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
     List<Status.Code> codeOptions = Arrays.asList(
         Status.Code.UNKNOWN, Status.Code.RESOURCE_EXHAUSTED, Status.Code.INTERNAL);
-    if (!codeOptions.contains(status.getCode())) {
-      fail("Status code was not expected: " + status);
-    }
+    assertThat(codeOptions).contains(status.getCode());
   }
 
   /** This assumes the client limits metadata size to GrpcUtil.DEFAULT_MAX_HEADER_LIST_SIZE. */
@@ -1969,9 +1963,7 @@ public abstract class AbstractTransportTest {
     Status status = clientStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
     List<Status.Code> codeOptions = Arrays.asList(
         Status.Code.UNKNOWN, Status.Code.RESOURCE_EXHAUSTED, Status.Code.INTERNAL);
-    if (!codeOptions.contains(status.getCode())) {
-      fail("Status code was not expected: " + status);
-    }
+    assertThat(codeOptions).contains(status.getCode());
     assertFalse(clientStreamListener.headers.isDone());
   }
 
@@ -2013,9 +2005,7 @@ public abstract class AbstractTransportTest {
     Status status = clientStreamListener.status.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
     List<Status.Code> codeOptions = Arrays.asList(
         Status.Code.UNKNOWN, Status.Code.RESOURCE_EXHAUSTED, Status.Code.INTERNAL);
-    if (!codeOptions.contains(status.getCode())) {
-      fail("Status code was not expected: " + status);
-    }
+    assertThat(codeOptions).contains(status.getCode());
     Metadata metadata = clientStreamListener.trailers.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
     assertNull(metadata.get(tellTaleKey));
   }
@@ -2053,9 +2043,7 @@ public abstract class AbstractTransportTest {
    * assertion fails.
    */
   private static void assertCodeEquals(String message, Status expected, Status actual) {
-    if (expected == null) {
-      fail("expected should not be null");
-    }
+    assertNotNull("expected should not be null", expected);
     if (actual == null || !expected.getCode().equals(actual.getCode())) {
       assertEquals(message, expected, actual);
     }
@@ -2066,9 +2054,7 @@ public abstract class AbstractTransportTest {
   }
 
   private static void assertStatusEquals(Status expected, Status actual) {
-    if (expected == null) {
-      fail("expected should not be null");
-    }
+    assertNotNull("expected should not be null", expected);
     if (actual == null || !expected.getCode().equals(actual.getCode())
         || !Objects.equal(expected.getDescription(), actual.getDescription())
         || !Objects.equal(expected.getCause(), actual.getCause())) {
@@ -2147,13 +2133,10 @@ public abstract class AbstractTransportTest {
         throws InterruptedException {
       MockServerTransportListener listener =
           isServletServer ? this.listener : listeners.poll(timeout, unit);
-
-      if (listener == null) {
-        if (isServletServer) {
-          fail("Server transport not available");
-        } else {
-          fail("Timed out waiting for server transport");
-        }
+      if (isServletServer) {
+        assertNotNull("Server transport not available", listener);
+      } else {
+        assertNotNull("Timed out waiting for server transport", listener);
       }
       return listener;
     }
@@ -2199,9 +2182,7 @@ public abstract class AbstractTransportTest {
     public StreamCreation takeStreamOrFail(long timeout, TimeUnit unit)
         throws InterruptedException {
       StreamCreation stream = streams.poll(timeout, unit);
-      if (stream == null) {
-        fail("Timed out waiting for server stream");
-      }
+      assertNotNull("Timed out waiting for server stream", stream);
       return stream;
     }
   }
@@ -2232,9 +2213,7 @@ public abstract class AbstractTransportTest {
 
     @Override
     public void messagesAvailable(MessageProducer producer) {
-      if (status.isDone()) {
-        fail("messagesAvailable invoked after closed");
-      }
+      assertFalse("messagesAvailable invoked after closed", status.isDone());
       InputStream message;
       while ((message = producer.next()) != null) {
         messageQueue.add(message);
@@ -2243,25 +2222,19 @@ public abstract class AbstractTransportTest {
 
     @Override
     public void onReady() {
-      if (status.isDone()) {
-        fail("onReady invoked after closed");
-      }
+      assertFalse("onReady invoked after closed", status.isDone());
       readyQueue.add(new Object());
     }
 
     @Override
     public void halfClosed() {
-      if (status.isDone()) {
-        fail("halfClosed invoked after closed");
-      }
+      assertFalse("halfClosed invoked after closed", status.isDone());
       halfClosedLatch.countDown();
     }
 
     @Override
     public void closed(Status status) {
-      if (this.status.isDone()) {
-        fail("closed invoked more than once");
-      }
+      assertFalse("closed invoked more than once", this.status.isDone());
       this.status.set(status);
     }
   }
@@ -2289,9 +2262,7 @@ public abstract class AbstractTransportTest {
 
     @Override
     public void messagesAvailable(MessageProducer producer) {
-      if (status.isDone()) {
-        fail("messagesAvailable invoked after closed");
-      }
+      assertFalse("messagesAvailable invoked after closed", status.isDone());
       InputStream message;
       while ((message = producer.next()) != null) {
         messageQueue.add(message);
@@ -2300,17 +2271,13 @@ public abstract class AbstractTransportTest {
 
     @Override
     public void onReady() {
-      if (status.isDone()) {
-        fail("onReady invoked after closed");
-      }
+      assertFalse("onReady invoked after closed", status.isDone());
       readyQueue.add(new Object());
     }
 
     @Override
     public void headersRead(Metadata headers) {
-      if (status.isDone()) {
-        fail("headersRead invoked after closed");
-      }
+      assertFalse("headersRead invoked after closed", status.isDone());
       this.headers.set(headers);
     }
 
@@ -2321,9 +2288,7 @@ public abstract class AbstractTransportTest {
 
     @Override
     public void closed(Status status, RpcProgress rpcProgress, Metadata trailers) {
-      if (this.status.isDone()) {
-        fail("headersRead invoked after closed");
-      }
+      assertFalse("headersRead invoked after closed", this.status.isDone());
       this.status.set(status);
       this.trailers.set(trailers);
     }
