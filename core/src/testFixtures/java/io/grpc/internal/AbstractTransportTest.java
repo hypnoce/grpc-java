@@ -1120,11 +1120,11 @@ public abstract class AbstractTransportTest {
         clientStreamListener.trailers.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
     checkClientStatus(status, clientStreamStatus);
     assertEquals(
-        Lists.newArrayList(trailers.getAll(asciiKey)),
-        Lists.newArrayList(clientStreamTrailers.getAll(asciiKey)));
+        String.join(",", trailers.getAll(asciiKey)),
+        String.join(",", clientStreamTrailers.getAll(asciiKey)));
     assertEquals(
-        Lists.newArrayList(trailers.getAll(binaryKey)),
-        Lists.newArrayList(clientStreamTrailers.getAll(binaryKey)));
+        String.join(",", trailers.getAll(binaryKey)),
+        String.join(",", clientStreamTrailers.getAll(binaryKey)));
     assertTrue(clientStreamTracer1.getOutboundHeaders());
     assertSame(clientStreamTrailers, clientStreamTracer1.getInboundTrailers());
     assertSame(clientStreamStatus, clientStreamTracer1.getStatus());
